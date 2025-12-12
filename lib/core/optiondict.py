@@ -19,6 +19,7 @@ optDict = {
         "sessionFile": "string",
         "googleDork": "string",
         "configFile": "string",
+        "openapi": "string",
     },
 
     "Request": {
