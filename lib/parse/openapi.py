@@ -5,19 +5,14 @@ Copyright (c) 2006-2025 sqlmap developers (https://sqlmap.org)
 See the file 'LICENSE' for copying permission
 """
 
+import json
 import re
 
 from lib.core.common import getSafeExString
-from lib.core.common import readInput
 from lib.core.data import conf
-from lib.core.data import kb
 from lib.core.data import logger
 from lib.core.datatype import OrderedSet
-from lib.core.exception import SqlmapConnectionException
 from lib.core.exception import SqlmapDataException
-from lib.core.exception import SqlmapSyntaxException
-from lib.request.connect import Connect as Request
-from thirdparty import six
 from thirdparty.six.moves import urllib as _urllib
 
 def parseOpenAPI(content, baseUrl=None):
@@ -33,19 +28,18 @@ def parseOpenAPI(content, baseUrl=None):
     """
 
     retVal = OrderedSet()
+    spec = None
 
     try:
-        import json
         spec = json.loads(content)
-    except Exception:
+    except ValueError:
         try:
-            try:
-                import yaml
-            except ImportError:
-                errMsg = "OpenAPI YAML parsing requires the 'PyYAML' package. "
-                errMsg += "Please install it (e.g., 'pip install PyYAML') or use JSON format"
-                raise SqlmapDataException(errMsg)
+            import yaml
             spec = yaml.safe_load(content)
+        except ImportError:
+            errMsg = "OpenAPI YAML parsing requires the 'PyYAML' package. "
+            errMsg += "Please install it (e.g., 'pip install PyYAML') or use JSON format"
+            raise SqlmapDataException(errMsg)
         except Exception as ex:
             errMsg = "failed to parse OpenAPI specification ('%s')" % getSafeExString(ex)
             raise SqlmapDataException(errMsg)
@@ -132,7 +126,9 @@ def parseOpenAPI(content, baseUrl=None):
 
                 # Handle $ref for parameters
                 if "$ref" in param:
-                    continue  # Skip reference resolution for simplicity
+                    param = _resolveRef(param["$ref"], spec)
+                    if not param:
+                        continue
 
                 paramName = param.get("name", "")
                 paramIn = param.get("in", "")
@@ -195,6 +191,21 @@ def parseOpenAPI(content, baseUrl=None):
     return retVal
 
 
+def _getTypeAndFormat(param, schema):
+    """
+    Extract type and format from parameter or schema.
+    """
+    
+    if isinstance(schema, dict):
+        paramType = schema.get("type", param.get("type", "string"))
+        paramFormat = schema.get("format", param.get("format", ""))
+    else:
+        paramType = param.get("type", "string")
+        paramFormat = param.get("format", "")
+
+    return paramType, paramFormat
+
+
 def _getSampleValue(param, schema):
     """
     Generate a sample value based on parameter/schema type.
@@ -211,8 +222,7 @@ def _getSampleValue(param, schema):
         if "default" in schema:
             return schema["default"]
 
-    paramType = schema.get("type", param.get("type", "string")) if isinstance(schema, dict) else "string"
-    paramFormat = schema.get("format", param.get("format", "")) if isinstance(schema, dict) else ""
+    paramType, paramFormat = _getTypeAndFormat(param, schema)
 
     if paramType == "integer":
         return "1"
