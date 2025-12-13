@@ -135,6 +135,7 @@ from lib.core.threads import getCurrentThreadData
 from lib.core.threads import setDaemon
 from lib.core.update import update
 from lib.parse.configfile import configFileParser
+from lib.parse.openapi import parseOpenAPI
 from lib.parse.payloads import loadBoundaries
 from lib.parse.payloads import loadPayloads
 from lib.request.basic import checkCharEncoding
@@ -351,6 +352,53 @@ def _setCrawler():
         elif conf.requestFile and kb.targets:
             target = next(iter(kb.targets))
             crawl(target[0], target[2], target[3])
+
+def _setOpenAPI():
+    """
+    Parse OpenAPI/Swagger specification and extract targets.
+    """
+
+    if not conf.openapi:
+        return
+
+    infoMsg = "parsing OpenAPI specification from '%s'" % conf.openapi
+    logger.info(infoMsg)
+
+    content = None
+
+    # Check if it's a URL or a file path
+    if re.search(r"(?i)\Ahttps?://", conf.openapi):
+        try:
+            content = Request.getPage(url=conf.openapi, raise404=True)[0]
+        except SqlmapConnectionException as ex:
+            errMsg = "unable to retrieve OpenAPI specification from '%s' ('%s')" % (conf.openapi, getSafeExString(ex))
+            raise SqlmapConnectionException(errMsg)
+    else:
+        # It's a file path
+        openapiFile = safeExpandUser(conf.openapi)
+
+        if not checkFile(openapiFile, False):
+            errMsg = "specified OpenAPI specification file '%s' " % openapiFile
+            errMsg += "does not exist"
+            raise SqlmapFilePathException(errMsg)
+
+        with openFile(openapiFile, "rb") as f:
+            content = getUnicode(f.read())
+
+    if not content:
+        errMsg = "unable to read OpenAPI specification content"
+        raise SqlmapDataException(errMsg)
+
+    # Determine base URL from conf.url if provided
+    baseUrl = conf.url if conf.url else None
+
+    targets = parseOpenAPI(content, baseUrl)
+
+    for target in targets:
+        kb.targets.add(target)
+
+    if len(kb.targets) > 1:
+        conf.multipleTargets = True
 
 def _doSearch():
     """
@@ -2929,7 +2977,7 @@ def init():
 
     parseTargetDirect()
 
-    if any((conf.url, conf.logFile, conf.bulkFile, conf.requestFile, conf.googleDork, conf.stdinPipe)):
+    if any((conf.url, conf.logFile, conf.bulkFile, conf.requestFile, conf.googleDork, conf.stdinPipe, conf.openapi)):
         _setHostname()
         _setHTTPTimeout()
         _setHTTPExtraHeaders()
@@ -2945,6 +2993,7 @@ def init():
         _doSearch()
         _setStdinPipeTargets()
         _setBulkMultipleTargets()
+        _setOpenAPI()
         _checkTor()
         _setCrawler()
         _findPageForms()
